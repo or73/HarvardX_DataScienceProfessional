@@ -1,0 +1,8 @@
+library(rvest)
+library(readr)
+library(dplyr)
+library(ggplot2)
+library(stringr)
+library(lubridate)
+library(tidyr)
+library(dslabs)
