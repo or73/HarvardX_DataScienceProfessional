@@ -1,0 +1,629 @@
+---
+title: "Capstone Project - Heart Disease UCI"
+subtitle: "Prediction System"
+author: "Oscar Reyes"
+date: "`r format(Sys.time(), '%B %d, %Y')`"
+abstract: "This report is part of the final project capstone to obtain the 'Professional Certificate in Data Science' emited by Harvard University (HarvadX), through edx platform.  The main objective is to create a recommendation system using the Heart Disease UCI dataset, and it must be done training a machine learning algorithm using the inputs in one subset to predict in the validation set."
+header-includes: 
+    - \usepackage{float}
+    - \definecolor{my.clear.black}{RGB}{86, 101, 115}
+    - \definecolor{my.clear.gray}{RGB}{214, 219, 223}
+    - \definecolor{my.dark.gray}{RGB}{52, 73, 94}
+    - \definecolor{my.dark.green}{RGB}{14, 98, 81}
+    - \definecolor{my.dark.yellow}{RGB}{154, 125, 10  }
+    - \definecolor{my.orange}{RGB}{186, 74, 0}
+    - \definecolor{my.red}{RGB}{169, 50, 38}
+output:
+    pdf_document:
+        latex_engine: xelatex
+        toc: true
+        toc_depth: 3
+        number_sections: true
+        highlight: pygments
+        keep_tex: true
+font_size: 12pt
+geometry: left=2.5cm, right=2cm, top=2.5cm, bottom=2cm
+---
+
+```{r global_options, include=FALSE}
+knitr::opts_chunk$set(fig.width = 6, fig.height = 4, fig.align = 'center', fig.path = 'img/',
+                      echo = FALSE, warning = FALSE, message = FALSE,
+                      tidy.opts = list(width.cutoff = 80),
+                      tidy = TRUE)
+```   
+
+```{r package.options, include=FALSE}
+knitr::opts_knit$set(progress = TRUE, verbose = TRUE)
+```   
+
+```{r load.packages, include=FALSE}
+# -----------------------------------------------------------------------
+# ---------------------------------------------- CLEAN WORKSPACE
+# -----------------------------------------------------------------------
+rm(list = ls())
+gc()
+
+# -----------------------------------------------------------------------
+# ---------------------------------------------- SETTING WORK DIRECTORY
+# -----------------------------------------------------------------------
+setwd('~/capstoneProject2')
+
+# -----------------------------------------------------------------------
+# ---------------------------------------------- LOAD FILES
+# -----------------------------------------------------------------------
+source('./functions.R')
+
+# -----------------------------------------------------------------------
+# ---------------------------------------------- LOAD PACKAGES/LIBRARIES
+# -----------------------------------------------------------------------
+# Required packages
+packages.list <-  c('anytime',
+                    'Boruta',
+                    'caret', 'caretEnsemble', 'cluster',
+                    'data.table',
+                    'earth',
+                    'factoextra', 'fit.models', 'fpc', 'funModeling',
+                    'ggfortify', 'glmnet', 'gsubfn', 'ggvis',
+                    'kableExtra', 'knitr',
+                    'magrittr', 'MASS', 'matrixStats',
+                    'nnet',
+                    'pacman', 'party', 'plyr', 'png',
+                    'randomForest', 'rapport', 'rapportools',
+                    'RColorBrewer', 'RCurl', 'recosystem',
+                    'relaimpo', 'rlang', 'rmarkdown', 'ROCR', 'rpart',
+                    'skimr',
+                    'tidyverse',
+                    'utils')
+# Load required packages/libraries
+new.pkg <- packages.list[!(packages.list %in% installed.packages()[, 'Package'])]
+if (length(new.pkg))
+    install.packages(new.pkg,
+                     dependencies = TRUE,
+                     repos = 'http://cran.us.r-project.org')
+sapply(packages.list,
+       require,
+       character.only = TRUE)
+cat('All packages have been loaded')
+
+# -----------------------------------------------------------------------
+# ---------------------------------------------- LOAD DATASETS
+# -----------------------------------------------------------------------
+# Validate if files have been loaded previously
+cat('Loading  Data Set...\n')
+# Loading Dataset
+zip.fileName <- 'heart-disease-uci-data.zip'
+cat('Validating if file exists...\n')
+if (!file.exists('data', 'heart.csv') & file.exists(zip.fileName)) {
+    cat('unzipping file...\n')
+    unzip(zip.fileName,
+          list = TRUE)
+} else {cat('File already exist...\n')}
+
+
+hd.set <- read.csv(file.path('data', 'heart.csv'),
+                   header = TRUE)
+hd.set.numeric <- read.csv(file.path('data', 'heart.csv'),
+                           header = TRUE)
+# -----------------------------------------------------------------------
+# ---------------------------------------------- DATA ANALYSIS
+# -----------------------------------------------------------------------
+cat('Validating if any value is empty...\n')
+# Check if there are any blank values in the dataset
+sapply(hd.set,
+       function(x) sum(is.na(x))) # No NA values
+cat('Validating if any value is NA, NULL, NaN...\n')
+all(is.empty(hd.set))
+```   
+
+\pagebreak   
+   
+# Executive Summary
+The main purpose of this project is to develop a machine learning algorithm to predict wheter patients have a heart disease or not.  The entire dataframe can be found at [here](https://archive.ics.uci.edu/ml/datasets/Heart+Disease).
+
+The dataset contains 14 variables: 
+13 are independent - 8 categorical & 5 continuous variables
+1 binary called `target`.
+
+The procedure was:   
+
+1. **\textcolor{my.dark.gray}{Exploratory Analysis}**:  through data and graphics, evaluate all patients who have a heart disease and those who do not, with each of the independent variables.    
+2. **\textcolor{my.dark.gray}{Split Data Set}**: Split the data set into \textcolor{red}{train} and \textcolor{red}{test} sets, to create and evaluate the model.    
+
+# Introduction
+The present report covers the [Heart Attack UCI dataset](https://archive.ics.uci.edu/ml/datasets/Heart+Disease), with aknowledgements to:   
+
+Creators: 
+1. Hungarian Institute of Cardiology. Budapest: Andras Janosi, M.D. 
+2. University Hospital, Zurich, Switzerland: William Steinbrunn, M.D. 
+3. University Hospital, Basel, Switzerland: Matthias Pfisterer, M.D. 
+4. V.A. Medical Center, Long Beach and Cleveland Clinic Foundation: Robert Detrano, M.D., Ph.D.
+
+Donor: David W. Aha (aha '@' ics.uci.edu) (714) 856-8779
+
+The main objective for using this dataset is to build several machine learning classification models that predicts the presence of heart disease in a patient.  About 165 deaths per 100.000 individuals in 2007 die of heart disease in the United States every year - that's 1 in every 4 deaths, it is the leading cause of death in US.  Heart disease is the leading cause of death for both, mean and women.  More than half of the deaths due to heart disease in 2009 were in men.  More information can be found at [Heart Disease and Stroke Statistics-2019](https://healthmetrics.heart.org/wp-content/uploads/2019/02/At-A-Glance-Heart-Disease-and-Stroke-Statistics-%E2%80%93-2019.pdf)          
+
+**\textcolor{my.dark.yellow}{ The machine learning models used in this report aims to create a classifier that provides a high accuracy level combined with a los rate of false-negatives (high sensitivity) }**.   
+
+\textcolor{my.dark.green}{"This database contains 76 attributes, but all published experiments refer to using a subset of 14 of them.  In  particular, the Cleveland database is the only one that has been used by ML researches to this date.  The 'goal' field refers to the presence of heart disease in the patient.  It is integer value from 0 (no presence) to 4".}    
+\textcolor{my.dark.green}{
+[kaggle.com](https://www.kaggle.com/ronitf/heart-disease-uci)
+}   
+
+The dataset contains `r ncol(hd.set)` variables and `r nrow(hd.set)` observations.
+
+
+\pagebreak   
+
+# Data Analysis    
+
+## Selected Data    
+
+This dataset contains different attributes:    
+
+**\textcolor{my.dark.gray}{Independent Variables}**     
+- \textcolor{my.orange}{Categorical} **\textcolor{my.dark.gray}{(8)}**    
+
+```{r table.categorical.attributes, echo=FALSE}
+table.basic(new.tibble('Attribute', 
+                       'Definition', 
+                       c('ca', 'cp', 'exang', 'fbs', 'restecg', 'sex', 'slope', 'thal'), 
+                       c('number of major vessels (0-3) colored by flourosopy',
+                         'pain type (0 - 3)',
+                         'exercise induced angina (1 = yes; 0 = no)',
+                         'fbs(fasting blood sugar > 120 mg/dl) (1 = true; 0 = false)',
+                         'resting electrocardiographic results',
+                         'sex(1 = male; 0 = female)',
+                         'the slope of the peak exercise ST segment',
+                         'thal3 = normal; 6 = fixed defect; 7 = reversable defect')),
+            'Attributes And Definitions',
+            'small')
+```
+
+- \textcolor{my.orange}{Continuos} **\textcolor{my.dark.gray}{(5)}**    
+   
+```{r table.continuous.attributes, echo=FALSE}
+table.basic(new.tibble('Attribute', 
+                       'Definition', 
+                       c('age', 'chol', 'oldpeak', 'testbps', 'thalach'), 
+                       c('age in years',
+                         'cholserum cholestoral in mg/dl ',
+                         'oldpeakST depression induced by exercise relative to rest',
+                         'resting blood pressure (in mm/Hg on admission to the hospital)',
+                         'maximum heart rate achieved')),
+            'Attributes And Definitions',
+            'small')
+```    
+    
+**\textcolor{my.dark.gray}{Binary Attribute}**   
+- \textcolor{my.orange}{Binary Attribute} **\textcolor{my.dark.gray}{(1)}**   
+
+```{r table.binary.attribute, echo=FALSE}
+table.basic(new.tibble('Attribute',
+                       'Definition',
+                       c('target'),
+                       c('target 1 or 0')),
+            'Attributes And Definitions',
+            'small')
+```   
+
+The `target` variable represents the target feature with levels `1` or `0`, and its proportions are shown below:    
+
+```{r target.variable, echo=FALSE}
+round(prop.table(table(hd.set$target)),
+                 digits = 2)
+```
+
+Each attribute has been converted to `factor`:  
+
+```{r data.set.class, echo=FALSE}
+# -----------------------------------------------------------------------
+# ---------------------------------------------- DATA ANALYSIS
+# -----------------------------------------------------------------------
+
+# Dimensions of Dataset - Amount of instances (271) and attributes (14)
+dim(hd.set)
+hd.set <- data.frame(lapply(hd.set, function(x) factor(x)))
+
+# Types of Attributes - All types are integer, except 'oldpeak'
+sapply(hd.set, class)
+```    
+
+Let's see the **\textcolor{my.red}{10 first observations}** in data set:   
+
+```{r data.set.head, echo=FALSE}
+
+# Peek at the Data - First 10 data values
+head(hd.set, 10)
+```   
+
+A **\textcolor{my.red}{summary}** of dataset:   
+
+```{r data.set.sumary, echo=FALSE}
+# Statistical Summary - Summary of each attribute
+summary(hd.set)
+```   
+
+The **\textcolor{my.red}{structure}** of dataset:   
+
+```{r data.set.str, echo=FALSE}
+
+# Data Set structure
+str(hd.set)
+rm(new.pkg, packages.list, zip.fileName)
+```   
+
+## Distribution of the `target` Attribute   
+The `target` variable represents the target feature with levels `1` and `0`.  Its proportions are shown below:   
+
+```{r target.distribution, echo=FALSE}
+# ----------------------------------- TARGET VARIABLE PLOT
+target.distribution <- as.data.frame(round(prop.table(table(hd.set$target)),
+                                           digits = 2))
+target.distribution.freq <- lapply(target.distribution$Freq, function(x) paste(as.character(x*100), '%', sep = ''))
+target.distribution$Freq[1] <- target.distribution.freq[[1]]
+target.distribution$Freq[2] <- target.distribution.freq[[2]]
+
+table.basic(target.distribution, 'Target Variable Distribution', 'small')
+```   
+
+A graph that shows the previous proportions is:   
+
+```{r target.distribution.graph, echo=FALSE}
+graph.geom.bar(hd.set, 'Distribution of target Variable', 'target', 'count', target.distribution)
+```   
+
+## Exploring the Variable's Correlation   
+Most machine learning algorithms assume that the predictor variables are independent from each others.  This is the reason why the multiolinearity will be removed to achieve a more robust analysis.   
+
+**Variables' Correlation Plot**   
+
+```{r data.set.variables.correlation, echo=FALSE}
+# Exploring the variable's correlation
+hd.set.correlation <- cor(hd.set.numeric %>% select(-target))
+
+corrplot::corrplot(hd.set.correlation,
+                   order = 'hclust',
+                   tl.cex = 0.8,
+                   addrect = 8)
+```   
+
+The plot shows that none variables have a high correlation with any other, all correlations are less than 0.8.   
+
+# Data Transformation   
+We will remove highly correlated predictors, based on whose correlation is above 0.9.  For this purpose, we will use the `findcorrelation()` function, from caret package, which employs a heuristic algorithm to determine which variable should be removed instead of selecting bindly.   
+
+```{r data.transformation, echo=FALSE}
+# Data Transformation
+hd.set2 <- hd.set.numeric %>% select(-findCorrelation(hd.set.correlation,
+                                                      cutoff = 0.9))
+ncol(hd.set2)
+```   
+
+# Data Pre-Processing    
+## Principle Component Analysis (PCA)    
+The `target` variable is removed followd by scaling and centering these variables.   
+
+```{r data.pre.processing, echo=FALSE}
+# Data Pre-Processing
+# Principle Component Analysis (PCA)
+hd.set.pre.processing <- prcomp(hd.set.numeric %>% select(-target),
+                                scale = TRUE,
+                                center = TRUE)
+summary(hd.set.pre.processing)
+```   
+
+A plot of the compute proportion of variance is:   
+
+```{r graphic.proporiton.variance, echo=FALSE}
+# Compute the proportion of variance explained
+hd.set.variance <- hd.set.pre.processing$sdev^2
+hd.set.proportion.variance.explained <- hd.set.variance / sum(hd.set.variance)
+hd.set.cummulative <- cumsum(hd.set.proportion.variance.explained) # Cummulative percent explained
+table.proportion.variance.explained <- tibble(comp = seq(1:ncol(hd.set.numeric %>% select(-target))),
+                                              hd.set.proportion.variance.explained,
+                                              hd.set.cummulative)
+ggplot(table.proportion.variance.explained,
+       aes(x = comp, y = hd.set.cummulative)) +
+    geom_point() +
+    geom_abline(intercept = 0.95,
+                color = 'red',
+                slope = 0)
+```    
+
+The above plot shows that 95% of the variance is explained with all PC's, working with the original dataset.   
+
+## PCA Applied to the Transformed Dataset   
+```{r data.pre.processing2, echo=FALSE}
+# PCA Applied to the Transformed Dataset
+hd.set.pre.processing2 <- prcomp(hd.set2,
+                                 scale = TRUE,
+                                 center = TRUE)
+summary(hd.set.pre.processing2)
+```     
+
+A plot of the compute the proportion of variance explained is:   
+```{r graphic.proportion.variance2, echo=FALSE}
+# Compute the proportion of variance explained
+hd.set.variance2 <- hd.set.pre.processing2$sdev^2
+hd.set.proportion.variance.explained2 <- hd.set.variance2 / sum(hd.set.variance2)
+hd.set.cummulative2 <- cumsum(hd.set.proportion.variance.explained2) # Cummulative percent explained
+table.proportion.variance.explained2 <- tibble(comp = seq(1:ncol(hd.set2)),
+                                               hd.set.proportion.variance.explained2,
+                                               hd.set.cummulative2)
+ggplot(table.proportion.variance.explained2,
+       aes(x = comp, y = hd.set.cummulative2)) +
+    geom_point() +
+    geom_abline(intercept = 0.95,
+                color = 'red',
+                slope = 0)
+```    
+
+The above plot doesn't show any variation in comparisson with the previous plot of proportion of variance.   
+
+## Linear Discriminant Analysis (LDA)   
+Now we will use the LDA instead of PCA, since it takes into consideration the different classes & could provide better results.   
+```{r linear.dicriminant.analisys, echo=FALSE}
+# Linear Discriminant Analysis (LDA)
+hd.set.pre.processing.lda <- MASS::lda(target ~ .,
+                                       data = hd.set.numeric,
+                                       center = TRUE,
+                                       scale = TRUE)
+hd.set.pre.processing.lda
+# Dataframe of the LDA for visualization
+hd.set.predict.lda <- predict(hd.set.pre.processing.lda,
+                              hd.set.numeric)$x %>%
+    as_tibble() %>%
+    cbind(target = hd.set.numeric$target)
+```    
+
+
+## Data Analysis Between `Independent` Attributes & `target` Attribute   
+A [Bivariate Analysis](#barplots) has been done, between each `independent` attribute and `target`, all these plots can be found at the end of this document.     
+
+# Data Partition   
+Two sets (training & test) have been created from main dataset.    
+
+```{r data.partition, include=FALSE}
+# -----------------------------------------------------------------------
+# ---------------------------------------------- CREATNG DATA PARTITIONS
+# -----------------------------------------------------------------------
+cat('Creating training & test sets...\n')
+set.seed(1)
+test.index <- caret::createDataPartition(y = hd.set$target,
+                                         times = 1,
+                                         p = 0.2,
+                                         list = FALSE)
+train.set <- hd.set[-test.index,]
+test.set <- hd.set[test.index,]
+
+train.set.numeric <- hd.set.numeric[-test.index,]
+test.set.numeric <- hd.set.numeric[test.index,]
+
+cat('Training & Test sets are ready...\n')
+cat('Training & Test data sets are loaded')
+
+# ------------------------------------- Target group
+group.target <- hd.set %>% group_by(target)
+
+# ------------------------------------- trainControl
+# used to control the computational nuances of the train function
+control.set <- trainControl(method = 'cv', # the resampling method k-fold cross validation
+                            number = 15,
+                            classProbs = TRUE,
+                            summaryFunction = twoClassSummary)
+rm(hd.set, test.index, target.age, target.ca, target.chol, target.cp, target.exang, target.fbs, target.oldpeak, target.restecg, target.sex, target.slope, target.thal, target.thalach, target.trestbps)
+```
+
+A partition has been done, into `training`(80%) & `test`(20%) datasets:   
+
+```{r table.data.set.partition, echo=FALSE}
+table.basic(new.tibble('Dataset',
+                       'Observations',
+                       c('training', 'test'),
+                       c(nrow(train.set), nrow(test.set))),
+            'Attributes And Definitions',
+            'small')
+```   
+
+\pagebreak   
+
+# Model Creation   
+
+## Logistic Regression Model   
+The `Regresion Model` is very useful in this analysis because this is a binary classification problem.  
+Then, in order to make a suitable selection of the variables, the `Stepwise Backward & Forward` elimination method was used, as well as the `AIC(Akaike Information Criteria)` for selection criteria, and, `p-values` has been used to detect the least significant variables.   
+
+`stepAIC()` function has been used to choose the best model by `AIC`. It has an option named direction, which can take the following values: i) “both” (for stepwise regression, both forward and backward selection); “backward” (for backward selection) and “forward” (for forward selection). It return the best final model.  And, for out model we used the `both` option:    
+
+```{r regression.model, echo=FALSE}
+# ----------------------------------------------------------------------- -->
+# ---------------------------------------------- REGRESSION MODEL -->
+# ----------------------------------------------------------------------- -->
+model.regression <- glm(target ~ .,
+                        data = train.set,
+                        family = binomial(link = 'logit'))
+# --------------------------------------- Using Stepwise Backward Elimination
+# --------------------------------------- to select variables and improve model
+model.regression.vars <- stepAIC(model.regression,
+                                 direction = 'both',
+                                 trace = FALSE)
+summary(model.regression.vars)
+```    
+
+### Prediction   
+We use the `Regression Model` to make predictions on the test set. If we consider all the possible threshold values and the corresponding specificity and sensitivity rate what will be the final model accuracy.
+ROC(Receiver operating characteristic) curve is drawn by taking False positive rate on X-axis and True positive rate on Y- axis
+ROC tells us, how many mistakes are we making to identify all the positives?             
+
+```{r prediction.regresion.model, echo=FALSE}
+# --------------------------------------- Predictions on test.set & 
+# ---------------------------------------   evaluating model performance 
+predict <- predict(model.regression.vars,                     
+                   test.set, 
+                   type = 'response') 
+ROC.prediction <- ROCR::prediction(predict,
+                                    test.set$target) 
+ROC.performance <- ROCR::performance(ROC.prediction,
+                                      'tpr',
+                                      'fpr')
+ROC.plot <- plot(ROC.performance, 
+     main = 'ROC Curve', 
+     type = 'l', 
+     col = 'blue')
+ROC.plot
+auc <- attributes(ROCR::performance(ROC.prediction, 'auc'))$y.values[[1]]
+```     
+
+The AUC (Area Under the Curve) has been calculated to measure performance, and its value is: `r auc`.     
+
+### Evaluating Model Performance    
+A value of `0.5` has been set as probability threshold.  And the confusion matrix shows the key performance measures like `sensitivity (0.85)` and `specificity (0.87)`.   
+
+```{r confusion.matrix, echo=FALSE}
+# Confusion Matrix
+probability.threshold <- 0.5
+predClass <- as.factor(ifelse(predict >= probability.threshold, 
+                              1, 
+                              0)) 
+caret::confusionMatrix(as.factor(test.set$target), predClass) 
+```
+
+### Results   
+- The logistic regression model fit the data very well, tha base model gave an AIC of `194.95`.    
+- We want that curve to be far away from straight line. Ideally we want the area under the curve as high as possible
+ROC comes with a connected topic, AUC. Area Under the Curve
+ROC Curve Gives us an idea on the performance of the model under all possible values of threshold.
+We want to make almost 0% mistakes while identifying all the positives, which means we want to see AUC value near to 1.   The graph that shows the AUC (Area Unde the Curve) is the following:   
+
+```{r roc.plot, echo=FALSE}
+plot(ROC.performance, 
+     main = 'ROC Curve', 
+     type = 'l', 
+     col = 'blue')
+```    
+And, the AUC = `r auc`   
+- Working with a `probability threshold` = `r probability.threshold`, the confusion matrix showed that `55` of `61` instances, in test set, were correctly classified.    
+- The Confusion Matrix shows the key performance measures like `sensitivity (0.85)` and `specificity (0.87)`.    
+
+### Conclusion    
+The dataset `Heart Disease UCI` was obtained from Kaggle.  This dataset were used to construct a logistic regression based on a predictive model, in order to detect if a patient has a heart disease, or not.   
+The proposed model achieved the best performance after using the `stepwise` elimination process, with the option `both`, to perform a two way elimination process `backward` and `forward`.  This process allowed us to identify:   
+
+| Importance | Variable Name           |
+|:---        |:---                     |
+| High       | ca, cp, sex             |
+| Low        | age, chol, fbs, restecg |   
+
+The final model results obtained, that describe the performance of the classification model, are:   
+
+| Variable   | Value |
+|:---        |:---   |
+|Accuracy    | 0.86  |
+|Sensitivity | 0.85  |
+|Specificity | 0.87  |    
+
+**Accuracy**: How often the classifier is correct 
+**Sensitivity**: True Positive Rate
+              Measures the proportion of actual positives that are correctly identified as such 
+**Specificity**: True Negative Rate
+             Measures the proportion of actual negatives that are correctly identified    
+
+\pagebreak   
+
+# Barplots - Bivariate Analysis {#barplots}     
+## `target` Vs `sex`   
+```{r barplot.target.sex, echo=FALSE}
+# Data Analysis - Between independent variables and 'target'
+# ------------------------------------- Target Vs Sex
+target.sex <- group.target %>% dplyr::count(sex)
+graph.target.geom.bar(target.sex, 'sex', 'Target Vs Sex', 'Split Variables with Target', 'Sex', 'Count', 'categorical', NULL, NULL)
+```    
+
+## `target` Vs `fbs`   
+```{r barplot.target.fbs, echo=FALSE}
+# ------------------------------------- Target Vs fbs
+target.fbs <- group.target %>% dplyr::count(fbs)
+graph.target.geom.bar(target.fbs, 'fbs', 'Target Vs fbs', 'Split Variables with Target', 'fbs', 'Count', 'categorical', NULL, NULL)
+```   
+
+## `target` Vs `exang`   
+```{r barplot.target.exang, echo=FALSE}
+# ------------------------------------- Target Vs exang
+target.exang <- group.target %>% dplyr::count(exang)
+graph.target.geom.bar(target.exang, 'exang', 'Target Vs exang', 'Split Variables with Target', 'exang', 'Count', 'categorical', NULL, NULL)
+```   
+
+## `target` Vs `slope`   
+```{r barplot.target.slope, echo=FALSE}
+# ------------------------------------- Target Vs slope
+target.slope <- group.target %>% dplyr::count(slope)
+graph.target.geom.bar(target.slope, 'slope', 'Target Vs slope', 'Split Variables with Target', 'slope', 'Count', 'categorical', NULL, NULL)
+```   
+
+## `target` Vs `ca`   
+```{r barplot.target.ca, echo=FALSE}
+# ------------------------------------- Target Vs ca
+target.ca <- group.target %>% dplyr::count(ca)
+graph.target.geom.bar(target.ca, 'ca', 'Target Vs ca', 'Split Variables with Target', 'ca', 'Count', 'categorical', NULL, NULL)
+```   
+
+## `target` Vs `cp`   
+```{r barplot.target.cp, echo=FALSE}
+# ------------------------------------- Target Vs cp
+target.cp <- group.target %>% dplyr::count(cp)
+graph.target.geom.bar(target.cp, 'cp', 'Target Vs cp', 'Split Variables with Target', 'cp', 'Count', 'categorical', NULL, NULL)
+```    
+
+## `target` Vs `restecg`   
+```{r barplot.target.restecg, echo=FALSE}
+# ------------------------------------- Target Vs restecg
+target.restecg <- group.target %>% dplyr::count(restecg)
+graph.target.geom.bar(target.restecg, 'restecg', 'Target Vs restecg', 'Split Variables with Target', 'restecg', 'Count', 'categorical', NULL, NULL)
+```   
+
+## `target` Vs `thal`   
+```{r barplot.target.thal, echo=FALSE}
+# ------------------------------------- Target Vs thal
+target.thal <- group.target %>% dplyr::count(thal)
+graph.target.geom.bar(target.thal, 'thal', 'Target Vs thal', 'Split Variables with Target', 'thal', 'Count', 'categorical', NULL, NULL)
+```   
+
+## `target` Vs `age`   
+```{r barplot.target.age, echo=FALSE}
+# ------------------------------------- Target Vs age
+target.age <- group.target %>% dplyr::count(age)
+target.age$numeric <- as.numeric(as.character(target.age$age))
+graph.target.geom.bar(target.age, 'age', 'Target Vs age', 'Split Variables with Target', 'age', 'Count', 'continuous', c(35, 80), c(0, 20))
+```     
+
+## `target` Vs `chol`   
+```{r barplot.target.chol, echo=FALSE}
+# ------------------------------------- Target Vs chol
+target.chol <- group.target %>% dplyr::count(chol)
+target.chol$numeric <- as.numeric(as.character(target.chol$chol))
+graph.target.geom.bar(target.chol, 'chol', 'Target Vs chol', 'Split Variables with Target', 'chol', 'Count', 'continuous', c(125, 410), c(0, 6))
+```    
+
+## `target` Vs `oldpeak`   
+```{r barplot.target.oldpeak, echo=FALSE}
+# ------------------------------------- Target Vs oldpeak
+target.oldpeak <- group.target %>% dplyr::count(oldpeak)
+target.oldpeak$numeric <- as.numeric(as.character(target.oldpeak$oldpeak))
+graph.target.geom.bar(target.oldpeak, 'oldpeak', 'Target Vs oldpeak', 'Split Variables with Target', 'oldpeak', 'Count', 'continuous', c(0, 6), c(0, 17))
+```    
+
+## `target` Vs `trestbps`   
+```{r barplot.target.trestbps, echo=FALSE}
+# ------------------------------------- Target Vs trestbps
+target.trestbps <- group.target %>% dplyr::count(trestbps)
+target.trestbps$numeric <- as.numeric(as.character(target.trestbps$trestbps))
+graph.target.geom.bar(target.trestbps, 'trestbps', 'Target Vs trestbps', 'Split Variables with Target', 'trestbps', 'Count', 'continuous', c(94, 194), c(0, 35))
+```   
+
+## `target` Vs `thalach`   
+```{r barplot.target.thalach, echo=FALSE}
+# ------------------------------------- Target Vs thalach
+target.thalach <- group.target %>% dplyr::count(thalach)
+target.thalach$numeric <- as.numeric(as.character(target.thalach$thalach))
+graph.target.geom.bar(target.thalach, 'thalach', 'Target Vs thalach', 'Split Variables with Target', 'thalach', 'Count', 'continuous', c(85, 195), c(0, 10))
+```

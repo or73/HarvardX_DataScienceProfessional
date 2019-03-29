@@ -1,0 +1,1020 @@
+---
+title: "Capstone Project - MovieLens"
+subtitle: "Recommendation System"
+author: "Oscar Reyes"
+date: "`r format(Sys.time(), '%B %d, %Y')`"
+abstract: "This report is part of the final project capstone to obtain the 'Professional Certificate in Data Science' emited by Harvard University (HarvadX), through edx platform.  The main objective is to create a recommendatin system using the MovieLens dataset, and it must be done training a machine learning algorithm using the inputs in one subset to predict movie ratings in the validation set."
+header-includes: 
+    - \usepackage{float}
+output:
+    pdf_document:
+        latex_engine: xelatex
+        toc: true
+        toc_depth: 3
+        number_sections: true
+        highlight: pygments
+        keep_tex: true
+font_size: 12pt
+geometry: left=1.5cm, right=1.5cm, top=1.8cm, bottom=1.8cm
+---
+
+```{r global_options, include=FALSE}
+knitr::opts_chunk$set(fig.width = 6, fig.height = 4, fig.align = 'center', fig.path = 'img/',
+                      echo = FALSE, warning = FALSE, message = FALSE,
+                      tidy.opts = list(width.cutoff = 80),
+                      tidy = TRUE)
+def.chunk.hook  <- knitr::knit_hooks$get('chunk')
+knitr::knit_hooks$set(chunk = function(x, options) {
+    x <- def.chunk.hook(x, options)
+    ifelse(options$size != 'normalsize',
+           paste0('\\',
+                  options$size,
+                  '\n\n',
+                  x,
+                  '\n\n \\normalsize'),
+           x)
+})
+```
+
+```{r package.options, include=FALSE}
+knitr::opts_knit$set(progress = TRUE, verbose = TRUE)
+```
+
+```{r load.packages, include=FALSE}
+source('./functions.R')
+# Required packages
+packages.list <- c('anytime',
+                   'caret', 'caretEnsemble', 'cluster',
+                   'data.table',
+                   'factoextra', 'formatR', 'fpc',
+                   'gsubfn', 'ggvis',
+                   'kableExtra', 'knitr',
+                   'magrittr', 'matrixStats',
+                   'pacman', 'plyr', 'png',
+                   'RColorBrewer', 'recosystem', 'rlang', 'rmarkdown',
+                   'skimr',
+                   'tidyverse')
+# Load required packages/libraries
+load.packages.list(packages.list)
+
+# Validate if files have been loaded previously
+if (!file_test('-f', file.path('data', 'edx.csv')) | !file_test('-f', file.path('data', 'validation.csv')) | !file_test('-f', file.path('data', 'edx_test.csv')) | !file_test('-f', file.path('data', 'validation_test.csv'))) {
+    cat('Loading MovieLens Data Set...\n')
+    # Loading MovieLens 10M Dataset
+    load.datasets()
+} else {
+    cat('edx & validation data sets are loaded')
+}
+
+# Loading data sets data
+edx <- read.csv(file.path('data', 'edx.csv'),
+                header = TRUE)
+edx.test <- read.csv(file.path('data','edx_test.csv'),
+                header = TRUE)
+validation <- read.csv(file.path('data','validation.csv'),
+                       header = TRUE)
+validation.test <- read.csv(file.path('data', 'validation_test.csv'),
+                            header = TRUE)
+# Create goups
+group.date.year <- edx.test %>% dplyr::group_by(date.year)
+group.date.year.month <- edx.test %>% dplyr::group_by(date.year.month)
+group.genres <- edx.test %>% dplyr::group_by(genres)
+group.movieId <- edx.test %>% dplyr::group_by(movieId)
+group.movieId.title <- edx.test %>% dplyr::group_by(movieId, title)
+group.rating <- edx.test %>% dplyr::group_by(rating)
+group.userId <- edx.test %>% dplyr::group_by(userId)
+group.edx.date.year <- edx %>% dplyr::group_by(date.year)
+group.edx.genre <- edx %>% dplyr::group_by(genres)
+group.edx.rating <- edx %>% dplyr::group_by(rating)
+group.edx.title <- edx %>% dplyr::group_by(title)
+group.edx.title.id <- edx %>% dplyr::group_by(movieId, title)
+group.edx.title.year <- edx %>% dplyr::group_by(date.year, title)
+group.edx.user <- edx %>% dplyr::group_by(userId)
+
+edx.test.nrow <- nrow(edx.test)
+edx.test.ncol <- ncol(edx.test)
+edx.test.names <- names(edx.test)
+edx.test.movies.genres.distinct <- dplyr::n_distinct(edx.test$genres)
+
+rm(packages.list)
+```   
+
+\pagebreak   
+   
+# Executive Summary
+The main purpose of this project is to develop a machine learning algorithm for a movie recommendation system using the MovieLens dataset, in order of predict movie ratings.  The entire dataframe can be found at [here](https://grouplens.org/datasets/movielens/latest/), but has been used the 10M version of the [MovieLens dataset](http://grouplens.org/datasets/movielens/10m/) to make the computation a little easier.
+
+The recommendation system will be created using all the tools learned throughout the courses in this series.  I applied different dimensionality reduction algorithms: Matrix Factorization and Neighborhood Approach.  It can be used to predit the rating of a user baed on an unrated movie. **RMSE** (Root-Mean-Squared-Error) has been applied as the evaluating criteria to analize the algorithm's performance.
+The principle used for this project is based on this definition of "recommender system":
+
+> *A recommender system or a recommendation system (sometimes replacing "system" with a synonym such as platform or engine) is a subclass of information filtering system that seeks to predict the "rating" or "preference" a user would give to an item.*
+> [Recommender System Definition](https://en.wikipedia.org/wiki/Recommender_system).
+
+This project could be the base to develop something simmilar to Amazon or Netflix recommendation systems, because a solution like this take users rating and use this information to predict a customer's rating, in order to anticipate the needs of a customer.   
+
+# Introduction
+The [10M version of the MovieLens dataset](http://grouplens.org/datasets/movielens/10m/) has been used to make the computation a little easier.
+
+## Selected Data
+This dataset contains different users' ratings for different movies (rating score between 1 and 5).
+```{r edx.test.training.test, echo=FALSE}
+users.movies <- edx.test %>%
+    summarize(Users = n_distinct(userId),
+              Movies = n_distinct(movieId))
+table(users.movies, 
+      'Amount of Users and Movies',
+      'small')
+rm(users.movies)
+```   
+
+\pagebreak   
+
+# RMSE
+The RMSE (Root Mean Squared Errors) will be used to measure que algorithms quality, and the algorithm qualification will be assigned accordign to the next table:   
+
+```{r rmse.table, echo=FALSE}
+table(new.tibble('Points', 
+                'RMSE', 
+                c('0', '5', '10', '15', '20', '25'), 
+                c('No RMSE reported',
+                  'RMSE >= 0.90000',
+                  '0.88000 <= RMSE <= 0.89999',
+                  '0.87917 <= RMSE <= 0.87999',
+                  '0.87751 <= RMSE <= 0.87916',
+                  'RMSE <= 0.87750')),
+      'RMSE Valoration',
+      'small')
+```   
+
+> The goal of this project is to obtain the lowest possible RMSE, because a RMSE is a measurement of error, and the smaller the error, the better.
+
+And, the function used to calculate the RMSE is:  
+    
+```{r rmse.function, echo=TRUE, eval=FALSE}
+# The RMSE function that will be used in this project is:
+RMSE <- function(true_ratings = NULL, predicted_ratings = NULL) {
+    sqrt(mean((true_ratings - predicted_ratings)^2))
+}
+```   
+   
+The RMSE formula is:
+**RMSE** = $\sqrt{\frac{\sum_{i=1}^N (Predicted_i - Actual_i)^2}{N}}$   
+   
+```{r rmse.formula, echo=FALSE}
+table(new.tibble('Variable', 
+                'Definition', 
+                c('N', 'Predicted', 'Actual'), 
+                c('Number of Samples',
+                   'Forecasts',
+                   'Observed Values')),
+      'RMSE Formula Values Definition',
+      'small')
+```   
+\pagebreak   
+
+<!-- * * * * * * *   Data Preparation and Preprocessing   * * * * * * * -->
+# Data Preparation and Preprocessing
+## Data Exploration
+The [MovieLens 10M dataset](https://grouplens.org/datasets/movielens/10m/), contains \textcolor{red}{`r edx.test.nrow`} rows and \textcolor{red}{`r edx.test.ncol`} columns, with column names: \textcolor{red}{`r edx.test.names`}, and the dataset structure is:   
+   
+```{r edx.test.structure, size='tiny', highlight=TRUE, echo = FALSE}
+str(edx.test)
+```   
+
+
+## DataLens Data Analysis   
+The \textcolor{red}{`10 first rows`} of \textcolor{red}{`DataLens dataset`} are:     
+```{r edx.test.head, size='tiny', echo=FALSE}
+table(head(edx.test, 10), 
+      'First 10 Rows', 
+      'big')
+```   
+   
+And, a more detailed information of \textcolor{red}{`DataLens Dataset`} is:   
+
+\small
+```{r edx.test.users.movies.ratings, highlight=TRUE, echo=FALSE, out.width='65%'}
+summary(edx.test)
+```   
+\pagebreak   
+\normalsize   
+
+# Methods & Analysis - Visualize the Importance of Variables   
+## All Data   
+Each variable and its amount in the data set is:   
+\textcolor{blue}{<Dates are grouped by month>}   
+    
+In the table we can see the total amount of each field in the dataset:            
+   
+```{r distinct.data, include=FALSE}
+edx.years <- n_distinct(edx.test$date.year)
+edx.months <- n_distinct(edx.test$date.year.month)
+edx.genres <- n_distinct(edx.test$genres)
+edx.rating <- n_distinct(edx.test$rating)
+edx.title <- n_distinct(edx.test$title)
+edx.users <- n_distinct(edx.test$userId)
+```
+     
+```{r movies.users.genres.list, echo=FALSE}
+table(new.tibble('Field', 
+                'Amount', 
+                c('Dates - Year', 'Dates - Month', 'Genres', 'Ratings', 'Titles', 'Users'), 
+                c(edx.years,
+                  edx.months,
+                  edx.genres,
+                  edx.rating,
+                  edx.title,
+                  edx.users)),
+      'Total Amount of each Field', 
+      'small')
+```   
+
+
+<!-- * * * * * * *   Analysis by Date   * * * * * * * -->   
+## Analysis by Date (timestamp)   
+   
+```{r min.max.year, echo=FALSE, include=FALSE}
+# Min year data
+min.year <- min(edx.test$date.year)
+# Max year data
+max.year <- max(edx.test$date.year) + 1
+```   
+The dataset contains information of \textcolor{red}{`r edx.years`} years, since: \textcolor{red}{`r min.year`} to \textcolor{red}{`r max.year`}.  And, we can see the behavior of ratings over the years:   
+   
+```{r table.ratings.years, echo=FALSE}
+table.edx.test.year <- group.date.year %>%
+    dplyr::summarize(ratings = n()) %>%
+    dplyr::arrange(date.year)
+
+graph.year.ratings <- graph.bar.col(table.edx.test.year, table.edx.test.year$date.year, table.edx.test.year$ratings, 'Ratings per Year', 'Amount of Ratings', 'Year', 'Ratings', 'bar')
+graph.year.ratings
+rm(edx.years, edx.months, edx.genres, edx.rating, edx.title, edx.users, min.year, max.year, table.edx.test.year, graph.year.ratings)
+```   
+
+An evaluation of ratings per year won't let us to identify the year with most ratings amount, because the behavior was irregular.   
+
+And, an evaluation of genres rating over the years:   
+
+```{r rable.ratings.years.genres, echo=FALSE}
+# Total ratings per genre, over years
+table.edx.test.year.genre <- edx.test %>%
+    dplyr::group_by(date.year, genres) %>%
+    dplyr::summarize(ratings = n()) %>%
+    dplyr::arrange(desc(date.year))
+
+graph.year.ratings.genre <- graph.bar.col(table.edx.test.year.genre, table.edx.test.year.genre$date.year, table.edx.test.year.genre$ratings, 'Genres Over Time', 'Genres by Year', 'year', 'ratings', 'col')
+graph.year.ratings.genre
+rm(table.edx.test.year.genre, graph.year.ratings.genre)
+```   
+
+Users by year:   
+   
+```{r}
+# Users by year
+table.edx.year.user <- group.date.year %>%
+    dplyr::summarize(users = n_distinct(userId)) %>%
+    dplyr::arrange(date.year)
+# Graphic of users per year
+graph.year.users <- graph.bar.col(table.edx.year.user, table.edx.year.user$date.year, table.edx.year.user$users, 'Users Over Time', 'Users by Year', 'Year', 'Users', 'bar')
+graph.year.users
+rm(table.edx.year.user, graph.year.users)
+```   
+   
+It won't be useful to add date into overall prediction, as result of the analysis of previous graphics, in which we can see that the year does not represent an evident influence over the ratings, but nevertheless, if we make an evaluation of successful movies on each year, it could be a point of analysis.  But, this is not the case.
+
+<!-- * * * * * * *   Analysis by Genres   * * * * * * * -->
+## Analysis by Genres   
+After separating all genres in the Data, we have obtained a total of \textcolor{red}{`r edx.test.movies.genres.distinct`} different genres, the following table shows the genres list and the amount of times that each one appear on data:   
+   
+Amount of movies per genres:   
+    
+```{r genres.list, echo=FALSE}
+# Top 10 genres for movies
+table.top.10.genres.movies <- table.count(TRUE, 
+                                          'Top 10 Genres', 
+                                          TRUE, 
+                                          10, 
+                                          edx.test, 
+                                          'genres', 
+                                          '')
+table.top.10.genres.movies
+rm(table.top.10.genres.movies)
+```   
+   
+   
+Drama, Comedy, Action, and Thriller are the most likely rated, which movies are the most rated?    
+   
+```{r movies.top.10, echo=FALSE}
+# Top 10 of most rated movies
+table.top.10.movies.rating <- table.count(FALSE, 
+                                          'Top 10 Rated Movies', 
+                                          TRUE, 
+                                          10, 
+                                          edx.test, 
+                                          'genres', 
+                                          'title')
+table.top.10.movies.rating
+rm(table.top.10.movies.rating)
+```   
+   
+The amount of movies per rating:   
+   
+```{r movies.per.rating, echo=FALSE}
+# Amount of movies per rating
+table.movies.rating <- table(group.rating %>% 
+          dplyr::summarize(movies = n_distinct(movieId)) %>% 
+          dplyr::arrange(desc(movies)), 
+      'Amount of Movies per Rating, with Different ID',
+      'small')
+table.movies.rating
+rm(table.movies.rating)
+```   
+
+Graph of Number of Movies Vs Number of Ratings:   
+    
+```{r graph.movies.vs.ratings, echo=FALSE}
+# Histogram on log scale with number of times movies have been rated
+graph.movies.ratings <- graph(group.movieId, 
+                              'movieId', 
+                              'Times Movies have been Rated', 
+                              'Movies Vs Rating', 
+                              'Movies', 
+                              'Rating',
+                              c(1,10,100,1000, 10000))
+graph.movies.ratings
+rm(graph.movies.ratings)
+```    
+
+<!-- * * * * * * *   Analysis by Rating   * * * * * * * -->   
+## Analysis by Rating & Year 
+```{r table1.rating.year, echo=FALSE, include=FALSE}
+# Analysis by Rating
+# <!-- Most & Less Rated years -->
+table.rating.year <- group.edx.date.year %>%
+    dplyr::summarize(ratings = n()) %>%
+    dplyr::arrange(date.year)
+
+most.rated.year <- table.rating.year[which.max(table.rating.year$ratings),]
+less.rated.year <- table.rating.year[which.min(table.rating.year$ratings),]
+```   
+
+Most rated year: \textcolor{red}{`r most.rated.year`}    
+Less rated year: \textcolor{red}{`r less.rated.year`}     
+   
+   
+```{r table.rated.year, echo=FALSE}
+table(table.rating.year,
+      'Rating Per Year',
+      'small')
+```   
+
+The graph of ratings by year is:   
+
+```{r graph.rating.year, echo=FALSE}
+graph.rating.year <- graph.bar.col.color(table.rating.year, table.rating.year$date.year, table.rating.year$ratings, 'Ratings of Years Over Time', 'Ratings per Year', 'Year', 'Rating', 'bar', which.max(table.rating.year$ratings), which.min(table.rating.year$ratings), length(table.rating.year$ratings))
+graph.rating.year
+rm(table.rating.year, most.rated.year, less.rated.year, graph.rating.year)
+```   
+
+## Analysis by Rating & Movie
+
+```{r table1.rating.movie, include=FALSE}
+# <!-- Most Rated Movie -->
+table.rating.movie <- group.edx.title %>%
+    dplyr::summarize(ratings = n()) %>%
+    dplyr::arrange(desc(ratings))
+
+# Most rated movie
+most.rated.movie <- table.rating.movie[which.max(table.rating.movie$ratings),]
+# Less rated movie
+less.rated.movie <- table.rating.movie[which.min(table.rating.movie$ratings),]
+```   
+
+The most rated movie is: \textcolor{red}{`r most.rated.movie`}   
+The less rated movie is: \textcolor{red}{`r less.rated.movie`}   
+
+```{r table.rating.movie, echo=FALSE}
+table.rating.movie <- table.rating.movie %>%
+    dplyr::slice(1:10)
+table(table.rating.movie,
+      'Ratings per Movie',
+      'small')
+```   
+
+The graph of ratings by movie is:   
+\tiny
+```{r graph.rating.movie, fig.height=8, echo=FALSE}
+graph.rating.movie <- graph.bar.col.color(table.rating.movie, table.rating.movie$title, table.rating.movie$ratings, 'Ratings of Movies Over Time', 'Ratings per Movie', 'Movie', 'Rating', 'bar', which.max(table.rating.movie$ratings), which.min(table.rating.movie$ratings), length(table.rating.movie$ratings))
+graph.rating.movie
+rm(table.rating.movie, most.rated.movie, less.rated.movie, graph.rating.movie)
+```   
+
+\normalsize   
+
+## Analysis by Rating & Genre   
+
+```{r table1.rating.genre, include=FALSE}
+table.rating.genre <- group.genres %>%
+    dplyr::summarize(ratings = n()) %>%
+    dplyr::arrange(ratings)
+table.rating.genre
+
+# Most rated genre
+most.rated.genre <-table.rating.genre[which.max(table.rating.genre$ratings),]
+# Less rated movie
+less.rated.genre <- table.rating.genre[which.min(table.rating.genre$ratings),]
+```  
+
+The most rated genre: \textcolor{red}{`r most.rated.genre`}   
+The less rated genre: \textcolor{red}{`r less.rated.genre`}   
+
+```{r table.rating.genre, echo=FALSE}
+table(table.rating.genre %>% dplyr::arrange(desc(ratings)),
+      'Ratings per Genre',
+      'small')
+```    
+
+The graph of ratings by genre is:   
+
+```{r graph.rating.genre, echo=FALSE}
+graph.rating.genre <- graph.bar.col.color(table.rating.genre, table.rating.genre$genres, table.rating.genre$ratings, 'Ratings of Genres Over Time', 'Ratings per Genre', 'Genre', 'Rating', 'bar', which.max(table.rating.genre$ratings), which.min(table.rating.genre$ratings), length(table.rating.genre$ratings))
+graph.rating.genre
+rm(table.rating.genre, most.rated.genre, less.rated.genre, graph.rating.genre)
+```      
+
+## Analysis of Ratings & User   
+
+<!-- User with more Ratings -->
+```{r table1.rating.user, include=FALSE}
+table.rating.user <- group.edx.user %>%
+    dplyr::summarize(ratings = n()) %>%
+    dplyr::arrange(desc(ratings))
+
+# Most rated user
+most.rated.user <- table.rating.user[which.max(table.rating.user$ratings),]
+# Less rated user
+less.rated.user <- table.rating.user[which.min(table.rating.user$ratings),]
+
+table.rating.user <- table.rating.user %>% slice(1:10)
+```   
+
+The most user ratings: \textcolor{red}{`r most.rated.user`}   
+The less user ratings: \textcolor{red}{`r less.rated.user`}   
+
+```{r table.rating.user, echo=FALSE}
+table(table.rating.user,
+      'Ratings per User',
+      'small')
+```   
+
+The graph of ratings by user is:    
+```{r graph.rating.user, echo=FALSE}
+table.rating.user$userId <- as.character(table.rating.user$userId)
+graph.rating.user <- graph.bar.col.color(table.rating.user, table.rating.user$userId, table.rating.user$ratings, 'Ratings of Users Over Time', 'Ratings per User', 'User ID', 'Rating', 'bar', which.max(table.rating.user$ratings), which.min(table.rating.user$ratings), length(table.rating.user$ratings))
+graph.rating.user
+rm(table.rating.user, graph.rating.user)
+```
+
+<!-- * * * * * * *   Analysis by Title   * * * * * * * -->   
+## Analysis by Title   
+```{r table1.rating.title, include=FALSE}
+table.rating.title <- group.edx.title %>%
+    dplyr::summarize(ratings = n()) %>%
+    dplyr::arrange(desc(ratings))
+
+# Most rated title
+most.rated.title <- table.rating.title[which.max(table.rating.title$ratings),]
+# Less rated title
+less.rated.title <- table.rating.title[which.min(table.rating.title$ratings),]
+
+table.rating.title <- table.rating.title %>%
+    dplyr::slice(1:10)
+```   
+
+The most rated title by year:   
+   
+```{r table.rating.title, echo=FALSE}
+table1.rating.title <- table(table.rating.title,
+      'Rating per Title',
+      'small')
+table1.rating.title
+```   
+
+The most rated title: \textcolor{red}{`r most.rated.title`}   
+The less rated title: \textcolor{red}{`r less.rated.title`}   
+
+Rating per title:   
+   
+```{r graph.rating.title, fig.height=7, echo=FALSE}
+graph.rating.title <- graph.bar.col.color(table.rating.title, table.rating.title$title, table.rating.title$ratings, 'Ratings of Title Over Time', 'Ratings per Title', 'Title', 'Rating', 'bar', which.max(table.rating.title$ratings), which.min(table.rating.title$ratings), length(table.rating.title$ratings))
+graph.rating.title
+rm(table.rating.title, most.rated.title, less.rated.title, table1.rating.title, graph.rating.title)
+```   
+
+Most rated title per year:   
+
+```{r table.edx.title.year, echo=FALSE}
+# <!-- Most Success Movie/Title per Year -->
+table.edx.title.year <- group.edx.title.year %>%
+    dplyr::summarize(ratings = n()) %>%
+    dplyr::filter(ratings == max(ratings)) %>%
+    dplyr::arrange(date.year, desc(ratings))
+
+# Most rated title per year
+table(table.edx.title.year,
+      'Most Rated Title per Year',
+      'small')
+```   
+
+\tiny   
+
+```{r graph.rating.title.year, fig.height=7, echo=FALSE}
+graph.rating.title.year <- graph.bar.col.color(table.edx.title.year, table.edx.title.year$date.year, table.edx.title.year$ratings, 'Most Rated Title per Year', 'Title per Year', 'Title', 'Rating', 'bar', which.max(table.edx.title.year$ratings), which.min(table.edx.title.year$ratings), length(table.edx.title.year$ratings))
+graph.rating.title.year <- graph.rating.title.year +
+    geom_text(aes(x = table.edx.title.year$date.year, label = table.edx.title.year$title),
+              color = 'black',
+              size = 2.5,
+              angle = 70,
+              check_overlap = TRUE,
+              hjust = 0,
+              nudge_x = 0,
+              vjust = 0,
+              nudge_y = 0.5)
+graph.rating.title.year
+rm(table.edx.title.year, graph.rating.title.year)
+```   
+
+\normalsize   
+
+<!-- * * * * * * *   Analysis by Users   * * * * * * * -->   
+## Analysis by Users     
+
+```{r most.less.rated.user, include=FALSE}
+#     <!-- User's Ratings -->
+table.rating.user <- group.rating %>%
+    dplyr::summarize(ratings = n()) %>%
+    dplyr::mutate(percent = ratings / nrow(edx.test) * 100) %>%
+    dplyr::arrange(desc(ratings))
+
+graph.rating.user <- graph.bar.col.color(table.rating.user, table.rating.user$rating, table.rating.user$ratings, 'Ratings Over Time', 'Rating', 'Rating', 'Ratings', 'bar', which.max(table.rating.user$ratings), which.min(table.rating.user$ratings), length(table.rating.user$ratings))
+```     
+
+A table of user with more ratings:   
+   
+```{r table.rating.user.show, echo=FALSE}
+#     <!-- User's Ratings -->
+table(table.rating.user,
+      'Ratings per Rating Value',
+      'small')
+```   
+   
+The user with most ratings has the ID: \textcolor{red}{`r most.rated.user`}    
+The user with less ratings has the ID: \textcolor{red}{`r less.rated.user`}    
+
+>> Users rated movies with 4.0 over 28%, more than quarter of time
+   
+Graph of user's ratings:      
+
+```{r graph.rating.user.view}
+graph.rating.user
+rm(table.rating.user, graph.rating.user, most.rated.user, less.rated.user)
+```   
+   
+Amount of users per rating:   
+   
+```{r amount.users.ratings1, include=FALSE}
+#     <!-- User with more Ratings -->
+table.rating.user1 <- group.userId %>%
+    dplyr::summarize(ratings = n()) %>%
+    dplyr::arrange(desc(ratings))
+
+# Most rated user
+most.rated.user <- which.max(table.rating.user1$ratings)
+# Less rated user
+less.rated.user <- which.min(table.rating.user1$ratings)
+
+table.rating.user1 <- table.rating.user1 %>% slice(1:10)
+
+table.rating.user1$userId <- as.character(table.rating.user1$userId)
+graph.rating.user <- graph.bar.col.color(table.rating.user1, table.rating.user1$userId, table.rating.user1$ratings, 'Ratings by User', 'Ratings per User', 'User ID', 'Rating', 'bar', which.max(table.rating.user1$ratings), which.min(table.rating.user1$ratings), length(table.rating.user1$ratings))
+```
+
+A table that shows all ratings per user:   
+   
+```{r table.user.per.rating, echo=FALSE}
+table(table.rating.user1,
+      'Ratings per User',
+      'small')
+```
+   
+Graph of times that a user has rated a movie:   
+```{r graph.user.vs.rating, echo=FALSE}
+# Histogram on log scale of time a user have rated movies
+graph.rating.user
+rm(table.rating.user1, most.rated.user, less.rated.user, graph.rating.user)
+```  
+
+\pagebreak   
+   
+# Results      
+## Model Building & Training   
+The model used for developing the prediction algorithm follows: the mean rating \textcolor{red}{${\mu}$} is modified by one or more \textcolor{red}{bias} terms \textcolor{red}{b} with a residual error \textcolor{red}{$\epsilon$} expected.   
+   $Y{u,i} = \mu + b_{i} + b_{u} + b_{g} + \epsilon_{i,u,g}$   
+   
+Let's start writing a loss-function that computes the RMSE (Residual Mean Squared Error), as accuracy meassure.   
+   
+## Baseline Model    
+Let's start with a baseline model, the most basic recommendation system.  This baseline includes the average of all users accross all movies and use the average to predict all ratings:   
+   $Y_{u,i} = \mu + \epsilon_{u,i}$   
+
+```{r recommendation.algorithm, include=FALSE}
+# -----------------------------------------------------------------------
+# ---------------------------------------------- Recommendation Algorithm
+# -----------------------------------------------------------------------
+# mu calculation
+mu.hat <- mean(edx.test$rating)
+
+# RMSE Baseline model
+RMSE.baseline <- RMSE(edx.test$rating, mu.hat)
+
+# RMSEs comparisson table
+table.RMSE.comparisson <- tibble(method = 'Baseline',
+                                 RMSE = RMSE.baseline)
+```    
+
+No is time to predict a new rating to be the average tating of all movies in the training dataset, and it will be the \textcolor{red}{`Baseline RMSE`}.   
+**mu** = \textcolor{red}{`r mu.hat`} and baseline **RMSE** = \textcolor{red}{`r RMSE.baseline`}   
+   
+```{r table.RMSE.comparisson.baseline, echo=FALSE}
+table(table.RMSE.comparisson, 
+      'RMSEs Comparisson',
+      'small')
+```   
+   
+## Movies Bias   
+In order of improve the model, we will analyze the movies bias effect.   
+
+```{r movies.bias, include=FALSE}
+# -----------------------------------------------------------------------
+# ---------------------------------------------- DATASETS ANALYSIS
+# -----------------------------------------------------------------------
+
+# Movies Bias
+mu <- mean(edx.test$rating)
+movies.avg <- group.movieId %>%
+    dplyr::summarize(b.i = mean(rating - mu))
+
+str(movies.avg)
+graph.movies.avg <- graph.mean(movies.avg, movies.avg$b.i, 'Movies Bias', 'Movies Impact', 'b.i', '')
+
+names(movies.avg)
+# Predictions
+predict.rating <- mu.hat + edx.test %>%
+    left_join(movies.avg,
+              by = 'movieId') %>%
+    .$b.i
+
+# ---------------------------------------------- Movies Bias RMSE
+RMSE.movies.bias <- RMSE(predict.rating, edx.test$rating)
+table.RMSE.comparisson <- bind_rows(table.RMSE.comparisson,
+                                    tibble(method = 'Movies Bias',
+                                           RMSE = RMSE.movies.bias))
+```   
+
+In the next graph we can make a visual evaluation of \textcolor{red}{Movies Bias}   
+```{r movies.bias.graph, echo=FALSE}
+graph.movies.avg   
+```   
+An `lm` evaluation is not possible because the dataset is too big, and the computer could crash by memory.   The formula is: $Y_{u,i} = \mu + b_{i} + \epsilon_{u,i}$
+
+To solve the previous restriction, we can estimate the movie bias as $\hat{b_{i}} = y_{u,i} - \mu$ for each `i` movie.  The the equation to use is: $\hat{y_{u,i}} = \hat{\mu} + \hat{b_{i}}$   
+
+In this table we can see the RMSE produced by \textcolor{red}{Movies Bias}   
+
+```{r movies.bias.table, echo=FALSE}
+table(table.RMSE.comparisson, 'RMSEs Comparisson', 'small')   
+```   
+   
+We can see an improvement of \textcolor{red}{Movies Bias} over \textcolor{red}{Baseline}.   
+
+## Users Bias   
+   
+Is time for testing the \textcolor{red}{users bias}, and evaluate the impact over the model.   
+   
+```{r users.prediction, include=FALSE}
+# Movies Bias
+# ---------------------------------------------- User Bias
+users.avg <- edx.test %>%
+    dplyr::left_join(movies.avg,
+                     by = 'movieId') %>%
+    dplyr::group_by(userId) %>%
+    dplyr::summarize(b.u = mean(rating - mu.hat - b.i))
+
+# Predictions
+predict.rating <- mu.hat + edx.test %>%
+    left_join(users.avg,
+              by = 'userId') %>%
+    .$b.u
+# ---------------------------------------------- RMSE users Bias
+RMSE.users.bias <- RMSE(predict.rating,
+                        edx.test$rating)
+table.RMSE.comparisson <- bind_rows(table.RMSE.comparisson,
+                                    tibble(method = 'Users Bias',
+                                    RMSE = RMSE.users.bias))
+```  
+   
+Now, is time to see the impact of \textcolor{red}{User Bias} over the model.  
+   
+```{r table.rmse.comparisson.user.bias, echo=FALSE}
+table(table.RMSE.comparisson, 'RMSEs Comparisson', 'small')
+```
+   
+## Movies & Users Bias   
+  
+The next evaluation will include the \textcolor{red}{Movies and Users bias}.  
+
+```{r movies.users.bias, echo=FALSE}
+# ---------------------------------------------- Movies & User Bias
+movies.users.avg <- group.userId %>%
+    dplyr::summarize(b.u = mean(rating))
+
+graph.movies.users.bias <- graph.mean(movies.users.avg, movies.users.avg$b.u, 'Movies & Users Bias', 'Movies & Users Impact', 'b.u', '')
+
+# ---------------------------------------------- Calculate predictions with user & movies Bias
+# predict.rating
+predict.rating <- edx.test %>%
+    left_join(movies.avg, by = 'movieId') %>%
+    left_join(users.avg, by = 'userId') %>%
+    mutate(pred = mu.hat + b.i + b.u) %>%
+    .$pred
+
+# ---------------------------------------------- RMSE movies & users Bias
+RMSE.movies.users.bias <- RMSE(predict.rating,
+                               edx.test$rating)
+table.RMSE.comparisson <- bind_rows(table.RMSE.comparisson,
+                                    tibble(method = 'Movies & Users Bias',
+                                           RMSE = RMSE.movies.users.bias))
+```   
+
+In this analysis we will include the user effect ($b_{u}$).   
+   
+First, we can see a graph with the users rating average:   
+   
+```{r graph.movies.users.bias, echo=FALSE}   
+graph.movies.users.bias   
+```   
+   
+We can see that most of the users have an average between 3 and 4.5, and in the table we can see an improvement in the RMSE over the previous calculated RMSEs.   
+   
+```{r table.rmse.comparisson, echo=FALSE}
+table(table.RMSE.comparisson, 'RMSEs Comparisson', 'small')   
+```       
+
+\pagebreak      
+
+# Regularization   
+   
+```{r movies.reduce.repeated, include=FALSE}
+# ---------------------------------------------- Join all movies replications
+movies.joined <- edx.test %>%
+    dplyr::select(movieId, title) %>%
+    dplyr::distinct()
+```   
+   
+We can see that in the previous RMSEs,  \textcolor{red}{Movies Bias} and \textcolor{red}{Users Bias} are not the best option, but the \textcolor{red}{Users and Movies Bias} has the smallest RMSE.
+Is time to identify if our previous analysis contains any error, we will start with the \textcolor{red}{Movies Bias}.
+Let's see which is the result obtained with first ten (10) movies, ordered in descendant mode.   
+   
+```{r prediction.largest.errors.movies.bias, echo=FALSE}
+# ---------------------------------------------- Prediction - largest errors in edx.test data frame
+errors.edx.test <- edx.test %>%
+    dplyr::left_join(movies.avg, by = 'movieId') %>%
+    dplyr::mutate(residual = rating - (mu.hat + b.i)) %>%
+    dplyr::arrange(residual) %>%
+    dplyr::select(title, residual) %>%
+    dplyr::slice(1:10)
+table(errors.edx.test, 
+      'Largest Errors', 
+      'small')
+```    
+   
+
+We will reduce the repeated movies, to one, in order to identify the mistakes in a better way. And, after joined the titles, the top Best Movies Ratings, are:       
+   
+```{r movies.top10.movies.rating, echo=FALSE}
+# How many times the 10 best movies have been rated?
+movies.10.best.rated <- edx.test %>%
+    dplyr::count(movieId) %>%
+    dplyr::left_join(movies.avg) %>%
+    dplyr::left_join(movies.joined, 
+                     by = 'movieId') %>%
+    dplyr::arrange(desc(b.i)) %>%
+    dplyr::select(title, b.i, n) %>%
+    dplyr::slice(1:10)
+table(movies.10.best.rated, '10 Best Movies Rating', 'small')
+```      
+
+And, finally, after joined the titles, the top 10 Worst Movies Ratings, are:   
+   
+```{r movies.10.worst.movies.rating, echo=FALSE}
+# How many times the 10 top worst movies have been rated in edx dataset
+movies.10.worst.rated.movies <- edx.test %>%
+    dplyr::count(movieId) %>%
+    dplyr::left_join(movies.avg) %>%
+    dplyr::left_join(movies.joined,
+                     by = 'movieId') %>%
+    dplyr::arrange(b.i) %>%
+    dplyr::select(title,
+                  b.i,
+                  n) %>%
+    dplyr::slice(1:10)
+table(movies.10.worst.rated.movies, '10 Worst Movies Rating', 'small')
+rm(movies.10.best.rated, movies.10.worst.rated.movies)
+```       
+   
+Most of the movies rated as \textcolor{red}{Best Rated} and \textcolor{red}{Worst Rated} are not popular, in recent years, and these movies do not have to much ratings, so is required a better analysis.   In order of optimize $b_{i}$ we use the follwing equation: 
+$$\frac{1}{N} \sum_{u,i} (y_{u,i} - \mu - b_{i})^{2} + \lambda \sum_{i} b_{i}^2$$   
+And, the same reduced equation is:   
+
+$$\hat{b_{i}} (\lambda) = \frac{1}{\lambda + n_{i}} \sum_{u=1}^{n_{i}} (Y_{u,i} - \hat{\mu}) $$   
+
+The regularization method allows us to add a lambd to penalizes movies with large estimates from a small sample size.   
+   
+In this graph, we can see the estimates shrink with penalty:   
+
+```{r movies.lambda.penalty, echo=FALSE}
+# Add lamda for movies that have been rated few times
+lambda <- 1.25
+movies.reg.avg <- group.movieId %>%
+    dplyr::summarize(b.i = sum(rating - mu) / (n() + lambda),
+                     n.i = n())
+
+# ---------------------------------------------- Graph of estimated shrink with lambda
+movies.lambda <- tibble(original = movies.avg$b.i,
+                        regularized = movies.reg.avg$b.i,
+                        n = movies.reg.avg$n.i)
+movies.lambda %>%
+    ggplot(aes(original,
+               regularized,
+               size = sqrt(n))) +
+    geom_point(shape = 1,
+               alpha = 0.5)
+rm(lambda, movies.lambda)
+```
+   
+After regularization procedure, we should have a different information, let's see it:   
+   
+10 best rated movies after regularization:   
+```{r regularization.10.best.movies, echo=FALSE}
+# Top 10 of best movies after regularization
+movies.top.10.best.regularized <- edx.test %>%
+    dplyr::count(movieId) %>%
+    dplyr::left_join(movies.reg.avg) %>%
+    dplyr::left_join(movies.joined, 
+                     by = 'movieId') %>%
+    dplyr::arrange(desc(b.i)) %>%
+    dplyr::select(title, 
+                  b.i, 
+                  n) %>%
+    slice(1:10)
+table(movies.top.10.best.regularized, 
+      'Top 10 of Best Regularized Movies',
+      'small')
+```      
+
+10 worst rated movies after regularization:   
+```{r regularization.10.worst.movies, echo=FALSE}
+# Top 10 of worst movies after regularization
+movies.top.10.worst.regularized <- edx.test %>%
+    dplyr::count(movieId) %>%
+    dplyr::left_join(movies.reg.avg) %>%
+    dplyr::left_join(movies.joined, 
+                     by = 'movieId') %>%
+    dplyr::arrange(b.i) %>%
+    dplyr::select(title, 
+                  b.i, 
+                  n) %>%
+    slice(1:10)
+table(movies.top.10.worst.regularized, 
+      'Top 10 of Worst Regularized Movies',
+      'small')
+rm(movies.top.10.best.regularized, movies.top.10.worst.regularized)
+```   
+   
+Is time to validate if regularization represents some better performance.  And, the RMSEs table comparisson:    
+```{r regularization.predict.movies.bias, echo=FALSE}
+# ---------------------------------------------- Prediction for Movies Bias after regularization
+predict.rating <- edx.test %>%
+    left_join(movies.reg.avg, 
+              by = 'movieId') %>%
+    mutate(pred = mu.hat + b.i) %>%
+    .$pred
+
+# ---------------------------------------------- RMSE movies Bias after Regularization
+RMSE.movies.regularization.bias <- RMSE(predict.rating, 
+                                        edx.test$rating)
+table.RMSE.comparisson <- bind_rows(table.RMSE.comparisson,
+                                    tibble(method = 'Regularized - Movies Bias',
+                                           RMSE = RMSE.movies.regularization.bias))
+table(table.RMSE.comparisson, 
+      'RMSEs Comparisson',
+      'small')
+rm(predict.rating)
+```
+
+We can see a better perfomance betwee \textcolor{red}{Movies Bias} and \textcolor{red}{Regularization Movies Bias}.  And, we can validate that in the \textcolor{red}{Regularization Movies Bias} top 10 best and top 10 worst movies have a more logical ranking, according to the historical information.   
+
+## Identify Lambda   
+Now we must identify a `lambda` value to find the lowest RMSE, to identify it, we will use a function with a sequence of number from 0 to 7, applied to movies bias.  And, we will se in a graph the $\lambda$ which produces the lowest RMSE.   
+   
+```{r cross.validation.lambda, echo=FALSE}
+# ---------------------------------------------- Cross validation to choose a lambda
+# Identify the best lambda *from 0 to 7 at sequence of 0.25), over the movies bias, and the lowest value will be choosed
+
+# ---------------------------------------------- Regularization movies Bias
+lambda.values <- seq(0, 7, .25)
+mu <- mean(edx.test$rating)
+movies.sum <- group.movieId %>%
+    dplyr::summarize(sum = sum(rating - mu),
+                     n.i = n())
+
+rmses <- function(l){
+    predict.rating <- edx.test %>%
+        dplyr::left_join(movies.sum,
+                         by = "movieId") %>%
+        dplyr::mutate(b.i = sum / (n.i + l)) %>%
+        dplyr::mutate(pred = mu + b.i) %>%
+        .$pred
+
+    return(RMSE(predict.rating,
+                edx.test$rating))
+}
+
+RMSE.function.reg <- sapply(lambda.values,
+                            rmses)
+
+qplot(lambda.values,
+      RMSE.function.reg,
+      main = "Regularization",
+      xlab = "RMSE",
+      ylab = "Lambda") # lambda vs RMSE
+
+best.lambda <- lambda.values[which.min(RMSE.function.reg)]
+best.lambda
+```    
+   
+## Regularization Users & Movies Bias     
+
+We will find the $\lambda$ which provides the smallest RMSE:   
+     
+```{r regularization.users.movies.small.rmse, echo=FALSE}
+# ---------------------------------------------- Regularization users & movies Bias
+lambda.function <- function(l){
+    m.i <- group.movieId %>%
+        dplyr::summarize(m.i = sum(rating - mu)/(n() + l),
+                         count = n())
+    u.i <- edx.test %>%
+        dplyr::left_join(m.i,
+                         by = "movieId") %>%
+        dplyr::group_by(userId) %>%
+        dplyr::summarize(u.i = sum(rating - m.i - mu)/(n() + l))
+
+    predicted_ratings <- edx.test %>%
+        dplyr::left_join(m.i, by = "movieId") %>%
+        dplyr::left_join(u.i, by = "userId") %>%
+        dplyr::mutate(pred = mu + m.i + u.i) %>%
+        .$pred
+
+    return(RMSE(predicted_ratings,
+                edx.test$rating))
+}
+
+RMSE.function.reg <- sapply(lambda.values,
+                            lambda.function)
+
+qplot(lambda.values,
+      RMSE.function.reg,
+      main = "Regularization",
+      xlab = "RMSE",
+      ylab = "Lambda") # lambda vs RMSE
+
+best.lambda <- lambda.values[which.min(RMSE.function.reg)]
+```
+   
+The best $\lambda$ is: `r best.lambda`.   
+
+```{r best.rmse, echo=FALSE}
+# ---------------------------------------------- Best RMSE
+table.RMSE.comparisson <- bind_rows(table.RMSE.comparisson,
+                                    tibble(method = 'Regularized Moves & User',
+                                           RMSE = min(RMSE.function.reg)))
+table(table.RMSE.comparisson, 
+      'RMSEs Comparisson', 
+      'small')
+```   
+
+# Conclusion   
+Machine Learning has been used to create a `Movie Recommendation System`, and deduce that a join between `Users & Movies Bias`, produce the best RMSE improvement for our System.  The best and lowest obtained RMSE = `r min(RMSE.function.reg)`}
+
+<!--* * * * * * * * * * * * * * * * * * *   DOCUMENT ENDS   * * * * * * * * * * * * * * * * * * *-->
+
